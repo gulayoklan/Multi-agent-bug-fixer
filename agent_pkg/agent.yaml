@@ -1,0 +1,3 @@
+id: bug-fixer
+entrypoint: agent_pkg.agent:root_agent
+requirements: []

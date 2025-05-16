@@ -1,0 +1,25 @@
+# Use a slim Python 3.11 base
+FROM python:3.11-slim
+
+# Install Git (for cloning) and clean up apt caches
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set working dir
+WORKDIR /agent
+
+# Copy and install Python dependencies
+COPY requirements.txt /agent/requirements.txt
+RUN pip install --no-cache-dir -r /agent/requirements.txt
+
+# Copy your ADK package and in-container runner
+COPY agent_pkg/ /agent/agent_pkg/
+COPY runner_inside.py /agent/runner_inside.py
+COPY entrypoint.sh /agent/entrypoint.sh
+
+# Make the entrypoint runnable
+RUN chmod +x /agent/entrypoint.sh
+
+# When the container starts, it will invoke entrypoint.sh <instance_id>
+ENTRYPOINT ["/agent/entrypoint.sh"]
