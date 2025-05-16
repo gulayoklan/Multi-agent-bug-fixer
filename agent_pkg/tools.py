@@ -270,7 +270,7 @@ def _with_py(pattern: str, roots: List[str], limit: int) -> List[Dict]:
                 " failed counts, and a truncated log (max_output chars).",
 )
 
-def run_tests(paths: str = "", max_output: int = 20000) -> Dict[str, str | int]:
+def run_tests(paths: str = "") -> Dict[str, str | int]:
     """Run pytest programmatically.
 
     Parameters
@@ -282,7 +282,7 @@ def run_tests(paths: str = "", max_output: int = 20000) -> Dict[str, str | int]:
     """
     print("run_tests called")
     import pytest  # local import keeps module import cheap if pytest heavy
-
+    max_output = 20000
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         exit_code = pytest.main(paths.split())
