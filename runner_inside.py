@@ -33,11 +33,18 @@ runner = Runner(
     memory_service=memory_service
 )
 print("▶ Runner created", flush=True)
+# selected only instance_id, repo_path, test_patch, problem_statement to avoid contamination of agents by patch field
+agent_input = {
+    "instance_id": row["instance_id"],
+    "repo_path":   repo_path,
+    "test_patch":  row["test_patch"],
+    "problem_statement": row["problem_statement"],
+}
 
 # 5) Wrap the row as a user message
 user_message = types.Content(
     role="user",
-    parts=[types.Part(text=json.dumps(row))]
+    parts=[types.Part(text=json.dumps(agent_input))]
 )
 
 # 6) Execute the agent

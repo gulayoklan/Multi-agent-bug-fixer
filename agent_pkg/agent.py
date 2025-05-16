@@ -88,7 +88,10 @@ tester_agent = LlmAgent(
     name="tester",
     model=model,
     tools=[run_tests],
-    instruction="""Run pytest on the test_paths (default: tests). Return the summary of the test result.""",
+    instruction="""As the Tester agent, retrieve `repo_path` and `test_paths` from the shared state.  
+Then call the `RunTests` tool exactly once, passing those two arguments.  
+Finally, return the tool’s output—which is a dict containing `exit_code`, `passed`, `failed`, and `log`.  
+Do not attempt to run pytest yourself or call any other tools.""",
     output_key="test_result",
 )
 
@@ -109,7 +112,7 @@ locator_agent = LlmAgent(
     model=model,
     tools=[search_code],
     instruction="""Search for the code snippet by locating the source file & approximate line to modify inspecting 'problem_statement' of the instance.
-• Only use the search_code tool to locate the source.
+• Only make calls to the search_code tool that is already in your toolset to locate the source.
 • Inspect stacktrace (should start with traceback) if present.
 • Analyse stack trace to generate a pattern and a list of paths in the repository to search for that pattern.
 • Call search_code tool with the pattern and list of paths you found.
@@ -121,8 +124,10 @@ patcher_agent = LlmAgent(
     name="patcher",
     model=model,
     tools=[apply_patch],
-    instruction="""Craft a single‑line unified diff that fixes the tests, inspect instance's problem_statement from state and craft a solution accordingly.
-Call ApplyPatch. If it fails, revise on next turn. Reply ONLY with ApplyPatch
+    instruction="""Based on problem_statement(in the problem_statement field of instance in state) and the locator_output in state, generate a single line patch to fix the bug. 
+    • Use the apply_patch tool to apply the patch to the file and line you found in locator_output. Apply patch takes a patch string, a file path string and a line number integer as input.
+    • Only make calls to the apply_patch tool that is on your toolset already.
+    If it fails, revise on next turn. Reply ONLY with ApplyPatch
 JSON output.""",
 )
 def exit_loop(tool_context: ToolContext):

@@ -11,7 +11,7 @@ import pathlib
 from pathlib import Path
 import sys
 import os
-
+import difflib
 
 try:
     from adk import tool  # type: ignore
@@ -64,12 +64,12 @@ def _count_changed_lines(diff: str) -> tuple[int, int]:
 
 
 @tool(
-    name="ApplyPatch",
+    name="ApplyPatchp",
     description="Apply a unified diff to the repo and return whether it applied "
                 "cleanly. Rejects multi-line edits by default (set allow_multi_line=True "
                 "to override).",
 )
-def apply_patch(diff: str) -> Dict[str, str | int | bool]:
+def apply_patchp(diff: str) -> Dict[str, str | int | bool]:
     """Apply *diff* with `git apply`.
 
     Parameters
@@ -110,6 +110,61 @@ def apply_patch(diff: str) -> Dict[str, str | int | bool]:
     return {"ok": False, "msg": err, "lines_added": added, "lines_deleted": deleted}
 
 
+@tool(
+    name="ApplyPatch",
+    description=(
+        "Replace the line at `line_number` in `file_path` with `patch_text`, "
+        "returning the unified diff."
+    )
+)
+def apply_patch(
+    patch_text: str,
+    file_path: str,
+    line_number: int
+) -> Dict[str, Any]:
+    """
+    patch_text: the new code to insert (can be multiple lines, without leading/trailing newlines)
+    file_path:  path to the file to modify (relative or absolute)
+    line_number: 1-based line index to replace
+    """
+    path = pathlib.Path(file_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"No such file: {file_path}")
+
+    # Read original
+    original_lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    idx = line_number - 1
+    if not (0 <= idx < len(original_lines)):
+        raise IndexError(f"line_number {line_number} out of range (1–{len(original_lines)})")
+
+    # Prepare patched lines
+    # Ensure final newline
+    txt = patch_text
+    if not txt.endswith("\n"):
+        txt += "\n"
+    patch_lines = txt.splitlines(keepends=True)
+
+    # Build new file contents
+    new_lines = original_lines[:idx] + patch_lines + original_lines[idx+1:]
+
+    # Compute unified diff
+    diff = "".join(difflib.unified_diff(
+        original_lines,
+        new_lines,
+        fromfile=str(path),
+        tofile=str(path),
+        lineterm=""
+    ))
+
+    # Apply the change
+    path.write_text("".join(new_lines), encoding="utf-8")
+
+    return {
+        "file": str(path),
+        "line_number": line_number,
+        "diff": diff,
+    }
 @functools.lru_cache(maxsize=3)
 def _load_split(split: str):
     return load_dataset("princeton-nlp/SWE-bench_Lite", split=split)
@@ -270,42 +325,54 @@ def _with_py(pattern: str, roots: List[str], limit: int) -> List[Dict]:
                 " failed counts, and a truncated log (max_output chars).",
 )
 
-def run_tests(paths: str = "") -> Dict[str, str | int]:
-    """Run pytest programmatically.
-
+def run_tests(repo_path: str, paths: str = "") -> Dict[str, Any]:
+    """
     Parameters
     ----------
+    repo_path : str
+        Filesystem path to the checked-out repository.
     paths : str
-        Space‑separated list of test paths. Empty string runs the full suite.
-    max_output : int
-        Cap the size of the returned log to avoid blowing the token budget.
+        Space-separated list of test files or directories to run;
+        if empty, runs the full suite.
     """
-    print("run_tests called")
-    import pytest  # local import keeps module import cheap if pytest heavy
+    cwd = pathlib.Path(repo_path)
+    args = ["pytest", "-q", "--maxfail=1"]
+    if paths:
+        args += paths.split()
+
+    # Launch pytest as a subprocess so plugin errors become exit codes
+    proc = subprocess.run(
+        args,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+
+    out = proc.stdout + proc.stderr
+    exit_code = proc.returncode
+
+    # Extract passed/failed counts
+    passed = 0
+    failed = 0
+    m = re.search(r"(\d+)\s+passed", out)
+    if m:
+        passed = int(m.group(1))
+    m = re.search(r"(\d+)\s+failed", out)
+    if m:
+        failed = int(m.group(1))
+
+    # Truncate log if huge
     max_output = 20000
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-        exit_code = pytest.main(paths.split())
-    log = buf.getvalue()
-
-    # Parse summary line(s)
-    fail = pass_ = 0
-    m = re.search(r"= *(\d+) failed", log)
-    if m:
-        fail = int(m.group(1))
-    m = re.search(r"= *(\d+) passed", log)
-    if m:
-        pass_ = int(m.group(1))
-
-    # Truncate long logs (keep head + tail)
-    if len(log) > max_output:
+    if len(out) > max_output:
         half = max_output // 2
-        log = log[:half] + "\n[…truncated…]\n" + log[-half:]
+        log = out[:half] + "\n…(truncated)…\n" + out[-half:]
+    else:
+        log = out
 
     return {
         "exit_code": exit_code,
-        "passed": pass_,
-        "failed": fail,
+        "passed": passed,
+        "failed": failed,
         "log": log,
     }
 
