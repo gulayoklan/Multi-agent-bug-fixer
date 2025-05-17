@@ -49,49 +49,35 @@ from google.genai import types
 # Custom deterministic agent that just runs pytest
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
-"""
-class TesterAgent(BaseAgent):
-    test_paths: str | list[str] = "tests"        # <-- here
-    model_config = {"arbitrary_types_allowed": True}
 
-    def __init__(self, name: str = "tester", test_paths: str | list[str] = "tests"):
-        super().__init__(name=name, test_paths=test_paths)
-
-    async def _run_async_impl(
-        self, ctx: InvocationContext
-    ) -> AsyncGenerator[Event, None]:
-        paths = self.test_paths
-        logger.info("[%s] Starting pytest on %s", self.name, paths)
-        
-        result = run_tests(paths)
-
-        summary = (
-            "✅ All tests passed."
-            if result["exit_code"] == 0
-            else f"❌ {result['failed']} failed, {result['passed']} passed."
-        )
-        logger.info("[%s] %s", self.name, summary)
-
-        yield Event(
-            author=self.name,
-            content=types.Content(parts=[types.Part.from_text(summary)]),
-            actions=EventActions(state_delta={"test_result": result}),
-        )
-"""
 model= LiteLlm(
     model            = "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
     max_tokens       = 1024,
     temperature      = 1,
     api_base         = None,         
 )
+
 tester_agent = LlmAgent(
     name="tester",
     model=model,
     tools=[run_tests],
-    instruction="""As the Tester agent, retrieve `repo_path` and `test_paths` from the state.  
-Then call the `RunTests` tool exactly once, passing those two arguments.  
-Finally, return the tool’s output—which is a dict containing `exit_code`, `passed`, `failed`, and `log`.  
-Do not attempt to run pytest yourself or call any other tools.""",
+    instruction="""
+As the Tester agent, you have these values in state:
+  • python_exe   (path to the per‐repo venv python executable)
+  • repo_path    (path to the checked‐out source)
+  • test_paths   (space‐separated test file(s)/dir(s) or empty string)
+
+Your job:
+1) Retrieve `python_exe`, `repo_path` and `test_paths` from state.
+2) Call the RunTests tool exactly once, passing in:
+     python_exe=<python_exe>,
+     repo_path=<repo_path>,
+     paths=<test_paths>
+3) Return the tool’s output, a dict containing:
+     exit_code, passed, failed, and log.
+
+Do not run pytest yourself or call any other tools.
+""",
     output_key="test_result",
 )
 
@@ -99,24 +85,24 @@ Do not attempt to run pytest yourself or call any other tools.""",
 # Agents definitions
 # ---------------------------------------------------------------------------
 
-fetcher_agent = LlmAgent(
-   name="fetcher",
-   model=model,
-   tools=[get_swe_lite_instance],
-   instruction="""Fetch the SWE-bench-lite instance from the dataset using user input instance_id. Return the output of get_swe_lite_instance tool.""",
-   output_key="instance",
-)
 
 locator_agent = LlmAgent(
     name="locator",
     model=model,
     tools=[search_code],
-    instruction="""Search for the code snippet by locating the source file & approximate line to modify inspecting 'problem_statement' of the instance.
-• Only make calls to the search_code tool that is already in your toolset to locate the source.
-• Inspect stacktrace (should start with traceback) if present.
-• Analyse stack trace to generate a pattern and a list of paths in the repository to search for that pattern.
-• Call search_code tool with the pattern and list of paths you found.
-Return the output of search_code: JSON {file, line, snippet}.""",
+    instruction="""You are the Locator agent. Your input is a JSON object with these fields:
+  • instance_id        – the unique ID of the bug instance  
+  • repo_path          – filesystem path to the checked-out repository  
+  • test_patch         – the test diff text that failed  
+  • problem_statement  – the human-readable bug description  
+
+Do **not** call any tool except **search_code(pattern: str, path: List[str])**.  
+Do **not** attempt to call any “get_state” or similar helper.  
+Steps:
+1. Read `problem_statement` from the input.  
+2. Derive a pattern and a list of file paths (strings, relative to `repo_path`) where that pattern might occur.  
+3. Call **search_code** exactly once
+Output only searcg_code's output, a JSON array of {file, line, snippet}""",
     output_key="locator_output",
 )
 
@@ -127,9 +113,10 @@ patcher_agent = LlmAgent(
     instruction="""Based on problem_statement(in the problem_statement field of instance in state) and the locator_output in state, generate a single line patch to fix the bug. 
     • Use the apply_patch tool to apply the patch to the file and line you found in locator_output. Apply patch takes a patch string, a file path string and a line number integer as input.
     • Only make calls to the apply_patch tool that is on your toolset already.
-    If it fails, revise on next turn. Reply ONLY with ApplyPatch
+    If it fails, revise on next turn. Reply ONLY with apply_patch
 JSON output.""",
 )
+
 def exit_loop(tool_context: ToolContext):
   """Call this function ONLY when the critic agent decides that bug fix is successful, signaling the iterative process should end."""
   print(f"  [Tool Call] exit_loop triggered by {tool_context.agent_name}")

@@ -19,7 +19,9 @@ row=get_swe_lite_instance(iid)
 
 # 3) Clone & checkout (shallow)
 print(f"▶ cloning {row['repo']}@{row['base_commit']} …", flush=True)
-repo_path = prepare_repo(row["repo"], row["base_commit"], workspace_root="/tmp")
+info= prepare_repo(row["repo"], row["base_commit"], workspace_root="/tmp")
+repo_path=info["repo_path"]
+python_exe=info["python_exe"]
 print(f"▶ repo ready at {repo_path}", flush=True)
 
 # 4) Build the ADK Runner
@@ -39,6 +41,7 @@ agent_input = {
     "repo_path":   repo_path,
     "test_patch":  row["test_patch"],
     "problem_statement": row["problem_statement"],
+    "python_exe": python_exe,
 }
 
 # 5) Wrap the row as a user message

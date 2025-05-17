@@ -32,25 +32,59 @@ def _run(cmd: list[str], cwd: pathlib.Path) -> None:
     if res.returncode:
         raise RuntimeError(res.stderr or res.stdout or "git failed")
 
-def prepare_repo(repo_slug: str, commit: str, workspace_root: str = "/tmp") -> str:
-    src = pathlib.Path(workspace_root) / repo_slug.replace("/", "__") / "src"
-    src.mkdir(parents=True, exist_ok=True)
+def prepare_repo(
+    repo_slug: str,
+    commit: str,
+    workspace_root: str = "/tmp",
+    mirror_root: str = "/mirror",
+) -> Dict[str, str]:
+    """
+    Returns {
+      'repo_path':   '/tmp/<repo_slug>/src',
+      'python_exe':  '/mirror/venvs/<repo_slug>/bin/python'
+    }
+    """
+    # 1) Shallow‐clone into workspace_root/<slug>/src
+    slug = repo_slug.replace("/", "__")
+    work_src = pathlib.Path(workspace_root) / slug / "src"
+    work_src.mkdir(parents=True, exist_ok=True)
 
-    # Init a brand-new repo
-    subprocess.run(["git", "init"], cwd=src, check=True, capture_output=True)
-    subprocess.run([
-        "git", "remote", "add", "origin", f"https://github.com/{repo_slug}.git"
-    ], cwd=src, check=True, capture_output=True)
+    for cmd in (
+        ["git", "init"],
+        ["git", "remote", "add", "origin", f"https://github.com/{repo_slug}.git"],
+        ["git", "fetch", "--depth", "1", "origin", commit],
+        ["git", "checkout", "--quiet", "FETCH_HEAD"],
+    ):
+        subprocess.run(cmd, cwd=work_src, check=True, capture_output=True)
 
-    # Shallow-fetch just this one commit
-    subprocess.run([
-        "git", "fetch", "--depth", "1", "origin", commit
-    ], cwd=src, check=True, capture_output=True)
+    # 2) Set up or reuse the per-repo venv under mirror_root/venvs/<slug>
+    python_exe = setup_env(slug, mirror_root)
 
-    # And check it out
-    subprocess.run(["git", "checkout", "--quiet", "FETCH_HEAD"], cwd=src, check=True)
+    return {
+        "repo_path":  str(work_src.resolve()),
+        "python_exe": python_exe,
+    }
 
-    return str(src.resolve())
+def setup_env(slug: str, mirror_root: str) -> str:
+    """
+    mirror_root is the absolute path inside the container (e.g. '/mirror').
+    slug is the repo_slug.replace('/', '__') used above.
+    Returns path to the venv's python binary.
+    """
+    mirror = pathlib.Path(mirror_root)
+    venv_root = mirror / "venvs" / slug
+    python_bin = venv_root / "bin" / "python"
+    pip_bin    = venv_root / "bin" / "pip"
+
+    if not venv_root.exists():
+        # 1) Create the venv
+        subprocess.run(["python3", "-m", "venv", str(venv_root)], check=True)
+        # 2) Install the repo's requirements.txt if present
+        req = pathlib.Path("/tmp") / slug / "src" / "requirements.txt"
+        if req.is_file():
+            subprocess.run([str(pip_bin), "install", "-r", str(req)], check=True)
+
+    return str(python_bin)
 
 def _count_changed_lines(diff: str) -> tuple[int, int]:
     """Return (#added, #deleted) excluding hunk headers."""
@@ -63,55 +97,10 @@ def _count_changed_lines(diff: str) -> tuple[int, int]:
     return added, deleted
 
 
-@tool(
-    name="ApplyPatchp",
-    description="Apply a unified diff to the repo and return whether it applied "
-                "cleanly. Rejects multi-line edits by default (set allow_multi_line=True "
-                "to override).",
-)
-def apply_patchp(diff: str) -> Dict[str, str | int | bool]:
-    """Apply *diff* with `git apply`.
-
-    Parameters
-    ----------
-    diff : str
-        Unified diff produced by `git diff -U<n>` or similar.
-    """
-    print("apply_patch called")
-    added, deleted = _count_changed_lines(diff)
-    total_changes = added + deleted
-    if total_changes > 1:
-        return {
-            "ok": False,
-            "msg": f"patch touches {total_changes} lines (limit is 1)",
-            "lines_added": added,
-            "lines_deleted": deleted,
-        }
-
-    # Run git apply with whitespace warnings suppressed (common in
-    # third‑party codebases)
-    proc = subprocess.run(
-        ["git", "apply", "--whitespace=nowarn", "-"],
-        input=diff.encode(),
-        capture_output=True,
-    )
-
-    if proc.returncode == 0:
-        return {
-            "ok": True,
-            "msg": "applied cleanly",
-            "lines_added": added,
-            "lines_deleted": deleted,
-        }
-
-    # Failure – attempt to revert (in case of partial apply)
-    subprocess.run(["git", "apply", "-R", "-"], input=diff.encode())
-    err = proc.stderr.decode(errors="ignore").strip() or "git apply failed"
-    return {"ok": False, "msg": err, "lines_added": added, "lines_deleted": deleted}
 
 
 @tool(
-    name="ApplyPatch",
+    name="apply_patch",
     description=(
         "Replace the line at `line_number` in `file_path` with `patch_text`, "
         "returning the unified diff."
@@ -198,7 +187,7 @@ def get_swe_lite_instance(instance_id: str) -> Dict[str, Any]:
                 " followed by optional 'git clean -fd'. Pass a specific commit"
                 " hash to reset to that point.",
 )
-def git_reset(commit: str = "--hard", clean_untracked: bool = True) -> Dict[str, str | bool]:
+def git_reset(commit: str , clean_untracked: bool = True) -> Dict[str, str | bool]:
     """Reset the git working tree.
 
     Parameters
@@ -325,7 +314,7 @@ def _with_py(pattern: str, roots: List[str], limit: int) -> List[Dict]:
                 " failed counts, and a truncated log (max_output chars).",
 )
 
-def run_tests(repo_path: str, paths: str) -> Dict[str, Any]:
+def run_tests(repo_path: str, paths: str, python_exe: str) -> Dict[str, Any]:
     """
     Parameters
     ----------
@@ -334,6 +323,7 @@ def run_tests(repo_path: str, paths: str) -> Dict[str, Any]:
     paths : str
         Space-separated list of test files or directories to run;
         if empty, runs the full suite.
+    python_exe : str
     """
     cwd = pathlib.Path(repo_path)
     args = ["pytest", "-q", "--maxfail=1"]
@@ -342,11 +332,11 @@ def run_tests(repo_path: str, paths: str) -> Dict[str, Any]:
 
     # Launch pytest as a subprocess so plugin errors become exit codes
     proc = subprocess.run(
-        args,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
+    [python_exe, "-m", "pytest", "-q", "--maxfail=1"] + paths.split(),
+    cwd=cwd,
+    capture_output=True,
+    text=True,
+)   
 
     out = proc.stdout + proc.stderr
     exit_code = proc.returncode
