@@ -193,7 +193,7 @@ def get_swe_lite_instance(instance_id: str) -> Dict[str, Any]:
 
 
 @tool(
-    name="GitReset",
+    name="git_reset",
     description="Rollback all workspace changes. Equivalent to 'git reset --hard'"
                 " followed by optional 'git clean -fd'. Pass a specific commit"
                 " hash to reset to that point.",
@@ -320,12 +320,12 @@ def _with_py(pattern: str, roots: List[str], limit: int) -> List[Dict]:
                 pass
     return hits
 @tool(
-    name="RunTests",
+    name="run_tests",
     description="Execute pytest and return a summary dict with exit_code, passed,"
                 " failed counts, and a truncated log (max_output chars).",
 )
 
-def run_tests(repo_path: str, paths: str = "") -> Dict[str, Any]:
+def run_tests(repo_path: str, paths: str) -> Dict[str, Any]:
     """
     Parameters
     ----------

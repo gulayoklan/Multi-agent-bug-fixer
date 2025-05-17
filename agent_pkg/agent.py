@@ -88,7 +88,7 @@ tester_agent = LlmAgent(
     name="tester",
     model=model,
     tools=[run_tests],
-    instruction="""As the Tester agent, retrieve `repo_path` and `test_paths` from the shared state.  
+    instruction="""As the Tester agent, retrieve `repo_path` and `test_paths` from the state.  
 Then call the `RunTests` tool exactly once, passing those two arguments.  
 Finally, return the tool’s output—which is a dict containing `exit_code`, `passed`, `failed`, and `log`.  
 Do not attempt to run pytest yourself or call any other tools.""",
@@ -144,7 +144,8 @@ critic_agent = LlmAgent(
     tools=[git_reset, exit_loop],
     instruction="""Evaluate `test_result`.
 If all tests pass: respond `success`, call exit_loop tool.
-Else: analyse traceback, update `locator_output` or `test_paths`, respond `retry` reset the git environment using 'git_reset' tool. """,
+Else: inspect the test_result in state and analyse it, respond `retry` reset the git environment using 'git_reset' tool. 
+Only use the git_reset and exit_loop tools that are already in your toolset. Do not call any other tools.""",
     output_key="critic_decision",
 )
 
