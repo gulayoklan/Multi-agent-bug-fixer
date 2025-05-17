@@ -142,10 +142,20 @@ critic_agent = LlmAgent(
     name="critic",
     model=model,
     tools=[git_reset, exit_loop],
-    instruction="""Evaluate `test_result`.
-If all tests pass: respond `success`, call exit_loop tool.
-Else: inspect the test_result in state and analyse it, respond `retry` reset the git environment using 'git_reset' tool. 
-Only use the git_reset and exit_loop tools that are already in your toolset. Do not call any other tools.""",
+    instruction="""You are the Critic agent. You have been given:
+
+  • `locator_output`, a JSON array of {file, line, snippet} dicts,
+    containing all candidate locations in the code.
+
+Do not call any `get_state` or similar tool.  
+Simply examine the supplied `locator_output`, pick the best single location to patch,  
+and then call the ApplyPatch tool with exactly these arguments:
+
+  • file_path: the value of locator_output[N].file  
+  • line_number: the value of locator_output[N].line  
+  • patch_text: the new code text you want to insert  
+
+Return the diff dict that ApplyPatch returns..""",
     output_key="critic_decision",
 )
 
